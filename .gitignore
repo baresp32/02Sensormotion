@@ -1,0 +1,15 @@
+.pio
+
+# === Secrets / Configuración privada ===
+include/secrets.h
+include/secrets.cpp
+lib/**/secrets.h
+lib/**/secrets.cpp
+
+# Evitar archivos locales
+*.env
+*.ini.local
+
+.vscode/
+*.DS_Store
+*.tmp
