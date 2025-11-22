@@ -30,3 +30,17 @@ Este dispositivo se conecta vía WiFi y publica datos por MQTT hacia un backend 
 
 - crear proyecto
 - pio project init --board esp32dev
+
+## Validar código
+pio run
+
+- flashear NVS:  pio run -t erase
+
+## Activar mosquito en dev
+docker compose up -d
+docker exec -it mosquitto mosquitto_sub -t "esp32/#"
+
+
+
+## Libreria PIOJSON
+- pio pkg install
