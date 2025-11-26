@@ -50,6 +50,45 @@ void WifiManager::begin()
     }
 }
 
+void WifiManager::begin(const String &s, const String &p)
+{
+    Serial.println("[WiFi] === Iniciando WifiManager (con parámetros) ===");
+
+    ssid = s;
+    pass = p;
+
+    Serial.print("[WiFi] SSID recibido: ");
+    Serial.println(ssid);
+
+    Serial.print("[WiFi] PASS recibido: ");
+    Serial.println(pass);
+
+    Serial.println("[WiFi] Llamando WiFi.begin...");
+    WiFi.begin(ssid.c_str(), pass.c_str());
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000)
+    {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println("[WiFi] 👍 Conectado!");
+        Serial.print("[WiFi] IP: ");
+        Serial.println(WiFi.localIP());
+
+        Serial.print("[WiFi] SSID conectado: ");
+        Serial.println(WiFi.SSID());
+    }
+    else
+    {
+        Serial.println("[WiFi] ❌ No se pudo conectar.");
+    }
+}
+
 void WifiManager::load()
 {
     prefs.begin("wifi", true);

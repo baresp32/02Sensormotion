@@ -1,4 +1,5 @@
 #include "Core.h"
+#include "../h360/h360service.h"
 #include "../wifi/WifiManager.h"
 #include "../bluetooth/BluetoothProvision.h"
 #include "../mqtt/MqttService.h"
@@ -66,39 +67,30 @@ namespace Core
     {
 
         Serial.begin(115200);
-
         delay(300);
 
-        Core::log("Iniciando sistema...");
+        Serial.println("[CORE] Inicializando...");
 
-        // 1) Cargar credenciales WiFi
-        wifi.begin();
+        H360::setup();                 // cargar config desde NVS
+        auto &cfg = H360::getConfig(); // obtener config cargada
 
-        // 2) Si no hay WiFi → provisioning
+        // ======== WIFI DINÁMICO ========
+        wifi.begin(cfg.wifiSsid, cfg.wifiPassword);
+
         if (!wifi.isConnected())
         {
-            Core::log("WiFi no disponible, activar BT...");
+            Serial.println("[CORE] WiFi no disponible → iniciar BT provisioning");
             bt.begin();
+            return; // ← IMPORTANTE
         }
-        else
-        {
-            Core::log("WiFi disponible.");
-            Core::log(("IP: " + wifi.getIP()).c_str());
-            // 🔥 APAGAR BLUETOOTH SI YA TENEMOS WIFI
-            bt.stop();
-            Core::log("Bluetooth apagado (ya tenemos WiFi).");
-            NtpService::begin();
-            mqtt.begin();
-            // Agregar un pequeño delay aquí para asegurarnos de que la conexión a MQTT esté lista.
-            delay(1000); // Espera de 1 segundo, ajustable según sea necesario.
 
-            // Ahora puedes intentar reconectar el cliente MQTT
-            if (!mqtt.isConnected())
-            {
-                Serial.println("[MQTT] Intentando reconectar...");
-                mqtt.reconnect();
-            }
-        }
+        Serial.println("[CORE] WiFi conectado. Continuando setup...");
+
+        // 3) MQTT SOLO SI HAY WIFI
+        mqtt.begin(cfg.mqttHost, cfg.mqttPort, cfg.mqttUser, cfg.mqttPass);
+
+        NtpService::begin();
+        delay(1000);
     }
 
     // ----------------------------------------------------
@@ -110,6 +102,13 @@ namespace Core
         if (wifi.isConnected())
         {
             bt.stop();
+        }
+
+        // 1) Si NO hay WiFi → SOLO Bluetooth provisioning
+        if (!wifi.isConnected())
+        {
+            bt.listen(); // permitir que el usuario envíe SSID/PASS
+            return;      // < — MUY IMPORTANTE
         }
 
         // 2) Offline → Sleep inteligente (NO dormir si BT está activo)

@@ -8,6 +8,7 @@ class WifiManager
 {
 public:
     void begin();
+    void begin(const String &s, const String &p);
     void save(const String &ssid, const String &pass);
     bool isConnected();
     String getIP();
