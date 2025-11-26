@@ -5,9 +5,15 @@
 #include "../ntp/NtpService.h"
 #include <ArduinoJson.h>
 
+#include <BluetoothSerial.h> // Asegúrate de incluir la librería
+
+// Definir SerialBT globalmente
+BluetoothSerial SerialBT; // Aquí definimos el objeto global SerialBT
+
 // Objetos globales
 WifiManager wifi;
 BluetoothProvision bt(&wifi);
+
 MqttService mqtt;
 
 #define LED_PIN 2 // El pin del LED de la placa (GPIO2)
@@ -78,14 +84,21 @@ namespace Core
         {
             Core::log("WiFi disponible.");
             Core::log(("IP: " + wifi.getIP()).c_str());
-        }
+            // 🔥 APAGAR BLUETOOTH SI YA TENEMOS WIFI
+            bt.stop();
+            Core::log("Bluetooth apagado (ya tenemos WiFi).");
+            NtpService::begin();
+            mqtt.begin();
+            // Agregar un pequeño delay aquí para asegurarnos de que la conexión a MQTT esté lista.
+            delay(1000); // Espera de 1 segundo, ajustable según sea necesario.
 
-        delay(500);
-        NtpService::begin();
-        delay(500);
-        mqtt.begin();
-        delay(500);
-        mqtt.reconnect(); // << FORZAR CONEXIÓN AQUÍ
+            // Ahora puedes intentar reconectar el cliente MQTT
+            if (!mqtt.isConnected())
+            {
+                Serial.println("[MQTT] Intentando reconectar...");
+                mqtt.reconnect();
+            }
+        }
     }
 
     // ----------------------------------------------------
@@ -93,32 +106,53 @@ namespace Core
     // ----------------------------------------------------
     void loop()
     {
+        // 1) Si hay WiFi → asegurar que BT esté apagado
+        if (wifi.isConnected())
+        {
+            bt.stop();
+        }
 
-        // Llamamos a la función para manejar el LED
-        mqtt.reconnect();
-        // 0) Offline total → Sleep seguro
-        if (handleOfflineMode())
-            return;
+        // 2) Offline → Sleep inteligente (NO dormir si BT está activo)
 
-        // 1) Si NO hay WiFi → escuchar BT provisioning
+        if (!wifi.isConnected())
+        {
+            Serial.println("[WiFi] No conectado a WiFi.");
+        }
+        if (!mqtt.isConnected())
+        {
+            Serial.println("[MQTT] No conectado al broker MQTT.");
+            mqtt.reconnect();
+        }
+
+        if (!wifi.isConnected() || !mqtt.isConnected())
+        {
+            if (!bt.isActive())
+            {
+                if (handleOfflineMode())
+                    return;
+            }
+        }
+
+        // 3) Si no hay WiFi → escuchar provisioning Bluetooth
         if (!wifi.isConnected())
         {
             bt.listen();
             return;
         }
 
-        // 3) Log con timestamp NTP
+        // 4) MQTT loop SIEMPRE (required)
+        mqtt.loop();
+
+        // 5) Log con timestamp NTP (tú decides si dejarlo)
         Serial.print("[");
         Serial.print(NtpService::now());
         Serial.println("]");
 
-        static unsigned long last = 0;
+        // 6) Cada 2 segundos → enviar payload JSON
+        static unsigned long lastPublish = 0;
 
-        // 4) Cada 2 segundos → enviar MQTT
-        if (millis() - last > 2000)
+        if (millis() - lastPublish >= 2000)
         {
-            mqtt.loop();
-            last = millis();
 
             StaticJsonDocument<128> doc;
             doc["timestamp"] = NtpService::now();
@@ -128,21 +162,14 @@ namespace Core
 
             mqtt.publish("esp32/test", payload);
 
-            Serial.print("[MQTT] publicado: ");
+            Serial.print("[MQTT] Publicado: ");
             Serial.println(payload);
+
+            lastPublish = millis();
         }
 
-        // 5) Log estado MQTT
-        if (!mqtt.isConnected())
-        {
-            Serial.println("[MQTT] ❌ NO CONECTADO");
-        }
-        else
-        {
-            Serial.println("[MQTT] ✔ CONECTADO");
-        }
-
-        delay(5000);
+        // 8) Pequeño delay suave (no bloquear)
+        delay(10); // 10 ms es suficiente y seguro
     }
 
 } // namespace Core

@@ -1,24 +1,34 @@
 #include "BluetoothProvision.h"
 
+extern BluetoothSerial SerialBT; // Declaración global de SerialBT
 
 BluetoothProvision::BluetoothProvision(WifiManager *ref)
 {
     wifi = ref;
 }
 
+void BluetoothProvision::stop()
+{
+    if (active)
+    {
+        SerialBT.end(); // Apaga Bluetooth
+        active = false;
+    }
+}
+
 void BluetoothProvision::begin()
 {
-    BT.begin("ESP32-Setup");
+    SerialBT.begin("ESP32-Setup"); // Usar SerialBT global
     Serial.println("[BT] Bluetooth listo. Formato: ssid;password");
+    active = true;
 }
 
 void BluetoothProvision::listen()
 {
-    if (!BT.available())
+    if (!SerialBT.available()) // Usar SerialBT global
         return;
 
-    // Cortar mensaje al recibir ENTER
-    String data = BT.readStringUntil('\n');
+    String data = SerialBT.readStringUntil('\n'); // Usar SerialBT global
     data.trim();
 
     Serial.print("[BT] Recibido: ");
@@ -50,13 +60,15 @@ void BluetoothProvision::listen()
     WiFi.begin(ssid.c_str(), pass.c_str());
 
     unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000)
+    {
         Serial.print(".");
         delay(400);
     }
     Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED)
+    {
         Serial.println("[BT] ✔️ Conexión exitosa!");
         Serial.print("[BT] IP: ");
         Serial.println(WiFi.localIP());
@@ -64,7 +76,8 @@ void BluetoothProvision::listen()
         Serial.print("[BT] Conectado a SSID: ");
         Serial.println(ssid);
     }
-    else {
+    else
+    {
         Serial.println("[BT] ❌ No se logró conectar. Verifique SSID o password.");
     }
 }
