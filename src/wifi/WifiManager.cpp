@@ -126,3 +126,9 @@ String WifiManager::getIP()
 {
     return WiFi.localIP().toString();
 }
+
+void WifiManager::reconnect()
+{
+    Serial.println("[WiFi] Reintentando conexión...");
+    WiFi.reconnect();
+}

@@ -1,35 +1,31 @@
+#include <ArduinoJson.h>
 #include "Core.h"
 #include "../h360/h360service.h"
 #include "../wifi/WifiManager.h"
 #include "../bluetooth/BluetoothProvision.h"
-#include "../mqtt/MqttService.h"
 #include "../ntp/NtpService.h"
-#include <ArduinoJson.h>
+#include "../mqtt/MqttConfig.h"
+#include "../mqtt/MqttService.h"
 
-#include <BluetoothSerial.h> // Asegúrate de incluir la librería
+#include <BluetoothSerial.h>
 
-// Definir SerialBT globalmente
-BluetoothSerial SerialBT; // Aquí definimos el objeto global SerialBT
-
-// Objetos globales
+// --- INSTANCIAS GLOBALES ---
+BluetoothSerial SerialBT;
 WifiManager wifi;
 BluetoothProvision bt(&wifi);
-
+MqttConfig mqttcfg;
 MqttService mqtt;
 
-#define LED_PIN 2 // El pin del LED de la placa (GPIO2)
+static unsigned long lastWifiAttempt = 0;
+static unsigned long backoff = 10; // Sleep inteligente
+#define LED_PIN 2
+bool setupMode = false;
 
 namespace Core
 {
     // ----------------------------------------------------
-    // LOGS
+    // LOG
     // ----------------------------------------------------
-    void log(const String &msg)
-    {
-        Serial.print("[CORE] ");
-        Serial.println(msg);
-    }
-
     void log(const char *msg)
     {
         Serial.print("[CORE] ");
@@ -37,26 +33,65 @@ namespace Core
     }
 
     // ----------------------------------------------------
-    // OFFLINE MODE (sleep inteligente)
+    // WIFI + BLUETOOTH
     // ----------------------------------------------------
-    static unsigned long backoff = 10; // segundos
+    void handleWifi()
+    {
+        if (!wifi.isConnected())
+        {
+            // Bluetooth ON mientras no haya WiFi
+            bt.listen();
 
+            // Reintentar conexión cada 30s (no spam)
+            if (millis() - lastWifiAttempt > 30000)
+            {
+                Serial.println("[WiFi] Reintentando conexión...");
+                wifi.reconnect();
+                lastWifiAttempt = millis();
+            }
+
+            return;
+        }
+
+        // Si ya hay WiFi → apagar BT
+        bt.stop();
+    }
+
+    // ----------------------------------------------------
+    // MQTT
+    // ----------------------------------------------------
+    void handleMqtt()
+    {
+        if (!wifi.isConnected())
+            return;
+
+        if (!mqtt.isConnected())
+        {
+            Serial.println("[MQTT] Reintentando conexión...");
+            mqtt.reconnect();
+            return;
+        }
+
+        mqtt.loop(); // obligatorio
+    }
+
+    // ----------------------------------------------------
+    // SLEEP inteligente (opcional)
+    // ----------------------------------------------------
     bool handleOfflineMode()
     {
-        if (!wifi.isConnected() || !mqtt.isConnected())
+        if (!wifi.isConnected())
         {
-            Core::log("[OFFLINE] No WiFi / No MQTT → sleep " + String(backoff) + "s");
+            Serial.println("[OFFLINE] No WiFi → sleep " + String(backoff) + "s");
 
             esp_sleep_enable_timer_wakeup(backoff * 1000000ULL);
             esp_light_sleep_start();
 
-            // Exponencial: 10 → 20 → 40 → 80 → 160 → 300 máx
             backoff = min(backoff * 2, (unsigned long)300);
             return true;
         }
 
-        // Si volvemos a estar online → resetear
-        backoff = 10;
+        backoff = 10; // Reset
         return false;
     }
 
@@ -65,110 +100,73 @@ namespace Core
     // ----------------------------------------------------
     void setup()
     {
-
         Serial.begin(115200);
         delay(300);
 
         Serial.println("[CORE] Inicializando...");
 
-        H360::setup();                 // cargar config desde NVS
-        auto &cfg = H360::getConfig(); // obtener config cargada
+        // Config interna H360
+        H360::setup();
+        auto &cfg = H360::getConfig();
 
-        // ======== WIFI DINÁMICO ========
-        wifi.begin(cfg.wifiSsid, cfg.wifiPassword);
-
-        if (!wifi.isConnected())
+        // --- WIFI ---
+        if (cfg.wifiSsid.length() == 0)
         {
-            Serial.println("[CORE] WiFi no disponible → iniciar BT provisioning");
-            bt.begin();
-            return; // ← IMPORTANTE
+            Serial.println("[CORE] Sin WiFi H360 → uso WifiManager (NVS)");
+            wifi.begin();
+
+            if (!wifi.isConnected())
+            {
+                Serial.println("[CORE] No hay WiFi almacenado → iniciar Bluetooth");
+                bt.begin();
+                return; // esperar credenciales por BT
+            }
+        }
+        else
+        {
+            wifi.begin(cfg.wifiSsid, cfg.wifiPassword);
         }
 
-        Serial.println("[CORE] WiFi conectado. Continuando setup...");
+        Serial.println("[CORE] WiFi OK, continuando...");
 
-        // 3) MQTT SOLO SI HAY WIFI
-        mqtt.begin(cfg.mqttHost, cfg.mqttPort, cfg.mqttUser, cfg.mqttPass);
+        // --- MQTT ---
+        mqttcfg.load();
+        Serial.println("=== DEBUG MQTT NVS ===");
+        Serial.println("Host: [" + mqttcfg.host + "]");
+        Serial.println("Port: " + String(mqttcfg.port));
+        Serial.println("User: [" + mqttcfg.user + "]");
+        Serial.println("Pass: [" + mqttcfg.pass + "]");
+        Serial.println("======================");
+        if (mqttcfg.host.length() == 0 || mqttcfg.port == 0)
+        {
+            Serial.println("[CORE] ⚠ MQTT vacío → usando bootstrap (secrets.h)");
+            mqtt.begin(MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD);
+            setupMode = true;   // 👈 AGREGAR SOLO ESTO            
+        }
+        else
+        {
+            mqtt.begin(mqttcfg.host, mqttcfg.port, mqttcfg.user, mqttcfg.pass);
+        }
 
+        // --- NTP ---
         NtpService::begin();
-        delay(1000);
     }
 
     // ----------------------------------------------------
-    // LOOP PRINCIPAL
+    // LOOP
     // ----------------------------------------------------
     void loop()
     {
-        // 1) Si hay WiFi → asegurar que BT esté apagado
-        if (wifi.isConnected())
-        {
-            bt.stop();
-        }
+        handleWifi();
+        if (!wifi.isConnected()) return;
 
-        // 1) Si NO hay WiFi → SOLO Bluetooth provisioning
-        if (!wifi.isConnected())
-        {
-            bt.listen(); // permitir que el usuario envíe SSID/PASS
-            return;      // < — MUY IMPORTANTE
-        }
-
-        // 2) Offline → Sleep inteligente (NO dormir si BT está activo)
-
-        if (!wifi.isConnected())
-        {
-            Serial.println("[WiFi] No conectado a WiFi.");
-        }
-        if (!mqtt.isConnected())
-        {
-            Serial.println("[MQTT] No conectado al broker MQTT.");
-            mqtt.reconnect();
-        }
-
-        if (!wifi.isConnected() || !mqtt.isConnected())
-        {
-            if (!bt.isActive())
-            {
-                if (handleOfflineMode())
-                    return;
-            }
-        }
-
-        // 3) Si no hay WiFi → escuchar provisioning Bluetooth
-        if (!wifi.isConnected())
-        {
-            bt.listen();
+        if (setupMode) {     // 👈 SOLO escuchar la config
+            mqtt.loop();
             return;
         }
 
-        // 4) MQTT loop SIEMPRE (required)
-        mqtt.loop();
+        handleMqtt();        // 👈 modo normal
 
-        // 5) Log con timestamp NTP (tú decides si dejarlo)
-        Serial.print("[");
-        Serial.print(NtpService::now());
-        Serial.println("]");
-
-        // 6) Cada 2 segundos → enviar payload JSON
-        static unsigned long lastPublish = 0;
-
-        if (millis() - lastPublish >= 2000)
-        {
-
-            StaticJsonDocument<128> doc;
-            doc["timestamp"] = NtpService::now();
-
-            char payload[128];
-            serializeJson(doc, payload);
-
-            mqtt.publish("esp32/test", payload);
-
-            Serial.print("[MQTT] Publicado: ");
-            Serial.println(payload);
-
-            lastPublish = millis();
-        }
-
-        // 8) Pequeño delay suave (no bloquear)
-        delay(10); // 10 ms es suficiente y seguro
     }
 
 } // namespace Core

@@ -75,6 +75,10 @@ void BluetoothProvision::listen()
 
         Serial.print("[BT] Conectado a SSID: ");
         Serial.println(ssid);
+        Serial.println("[BT] ✔️ Credenciales guardadas en NVS. Reiniciando ESP...");
+        wifi->save(ssid, pass);
+        delay(1000);
+        ESP.restart();
     }
     else
     {

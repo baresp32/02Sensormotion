@@ -16,6 +16,8 @@ public:
     bool hasCredentials();
     void setCredentials(const String &s, const String &p);
 
+    void reconnect();
+
 private:
     void load(); // <── ESTA FUNCIÓN FALTABA EN TU .h
 

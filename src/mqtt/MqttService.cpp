@@ -1,93 +1,54 @@
 #include "MqttService.h"
-#include "../h360/h360service.h" // Para llamar H360::applyConfig
+#include "../h360/h360service.h"
 
 MqttService::MqttService() : mqttClient(wifiClient) {}
 
-// ========================================================
-//  BEGIN con parámetros dinámicos (H360)
-// ========================================================
-void MqttService::begin(const String &host, int port, const String &user, const String &pass)
+void MqttService::begin(const String &h, int p, const String &u, const String &pw)
 {
-    this->host = host;
-    this->port = port;
-    this->username = user;
-    this->password = pass;
+    host = h;
+    port = p;
+    user = u;
+    pass = pw;
 
     mqttClient.setServer(host.c_str(), port);
 
-    // Registrar callback MQTT → MqttService::handleConfigMessage()
-    mqttClient.setCallback([this](char *topic, byte *payload, unsigned int length)
-                           { this->handleConfigMessage(topic, payload, length); });
+    mqttClient.setCallback([this](char *topic, byte *payload, unsigned int len)
+                           { this->handleConfigMessage(topic, payload, len); });
 
     reconnect();
 }
 
-// ========================================================
-//  ESTADO
-// ========================================================
-bool MqttService::isConnected()
-{
-    return mqttClient.connected();
-}
-
-// ========================================================
-//  RECONNECT
-// ========================================================
 void MqttService::reconnect()
 {
     if (mqttClient.connected())
         return;
 
-    Serial.print("[MQTT] Intentando conectar... ");
+    Serial.println("====== MQTT RECONNECT ======");
+    Serial.println("Host: " + host);
+    Serial.println("Port: " + String(port));
+    Serial.println("User: " + user);
 
     String clientId = "esp32-" + String(random(0xffff), HEX);
-    bool connected;
 
-    if (username.length() > 0)
+    bool ok = user.length() > 0
+                  ? mqttClient.connect(clientId.c_str(), user.c_str(), pass.c_str())
+                  : mqttClient.connect(clientId.c_str());
+
+    if (!ok)
     {
-        connected = mqttClient.connect(clientId.c_str(), username.c_str(), password.c_str());
-    }
-    else
-    {
-        connected = mqttClient.connect(clientId.c_str());
+        Serial.println("[MQTT] ❌ Error de conexión");
+        return;
     }
 
-    if (connected)
-    {
-        Serial.println("Conectado!");
+    Serial.println("[MQTT] ✔ Conectado");
 
-        // Suscribir comandos clásicos
-        mqttClient.subscribe("esp32/cmd/#");
-
-        // Suscribir config industrial
-        String topic = "h360/device/" + deviceId + "/config/set";
-        mqttClient.subscribe(topic.c_str());
-        Serial.print("[MQTT] Subscrito: ");
-        Serial.println(topic);
-    }
-    else
-    {
-        Serial.print("Fallo, rc=");
-        Serial.print(mqttClient.state());
-        Serial.println(" Reintentando en 3s...");
-        delay(3000);
-    }
+    String topic = "h360/device/" + deviceId + "/config/set";
+    Serial.println("[MQTT] Subscribiendo a: " + topic);
+    mqttClient.subscribe(topic.c_str());
+    Serial.println("[MQTT] ✔ Subscrito");
+    Serial.println("============================");
 }
 
-// ========================================================
-//  PUBLISH
-// ========================================================
-void MqttService::publish(const char *topic, const char *message)
-{
-    if (!mqttClient.connected())
-        reconnect();
-
-    mqttClient.publish(topic, message);
-}
-
-// ========================================================
-//  LOOP
-// ========================================================
 void MqttService::loop()
 {
     if (!mqttClient.connected())
@@ -96,18 +57,26 @@ void MqttService::loop()
     mqttClient.loop();
 }
 
-// ========================================================
-//  CALLBACK MQTT → Manejo de config industrial
-// ========================================================
-void MqttService::handleConfigMessage(char *topic, byte *payload, unsigned int length)
+void MqttService::publish(const char *topic, const char *msg)
 {
-    payload[length] = '\0';
+    if (!mqttClient.connected())
+        reconnect();
 
-    Serial.print("[MQTT] Config recibida: ");
-    Serial.println(topic);
+    mqttClient.publish(topic, msg);
+}
 
-    String json = String((char *)payload);
+void MqttService::handleConfigMessage(char *topic, byte *payload, unsigned int len)
+{
+    payload[len] = '\0';
 
-    // Llamar a H360 para actualizar configuración
-    H360::applyConfig(json);
+    Serial.println("⚡ [MQTT] Mensaje recibido en config/set");
+    Serial.println("Topic: " + String(topic));
+    Serial.println("Payload: " + String((char *)payload));
+
+    H360::applyConfig(String((char *)payload));
+}
+
+bool MqttService::isConnected()
+{
+    return mqttClient.connected();
 }
